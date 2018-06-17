@@ -76,8 +76,6 @@ void error(const __FlashStringHelper*err) {
 
 int value = 100;
 
-#define SPKR 0
-
 #include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -87,8 +85,8 @@ int value = 100;
 #define OLED_MOSI   9
 #define OLED_CLK   10
 #define OLED_DC    3
-#define OLED_CS    0
-#define OLED_RESET 1
+#define OLED_CS    12
+#define OLED_RESET 13
 Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 
 #define NUMFLAKES 10
@@ -126,8 +124,6 @@ static const unsigned char PROGMEM logo16_glcd_bmp[] =
 void setup() {
   while (!Serial);  // required for Flora & Micro
   delay(500);
-
-  pinMode(SPKR, OUTPUT); //set the speaker as output
 
   Serial.begin(115200);
 
@@ -219,53 +215,6 @@ void loop() {
     digitalWrite(13, LOW);  // LED off if needs refresh
     delay(100);
   }
-
-/*
-   digitalWrite(SPKR, HIGH);
-   delay(100);                     
-   digitalWrite(SPKR, LOW);
-   delay(100);
-
-   digitalWrite(SPKR, HIGH);
-   delay(100);                     
-   digitalWrite(SPKR, LOW);
-   delay(100);
-
-   digitalWrite(SPKR, HIGH);
-   delay(100);                     
-   digitalWrite(SPKR, LOW);
-   delay(100);
-
-   digitalWrite(SPKR, HIGH);
-   delay(1000);                     
-   digitalWrite(SPKR, LOW);
-   delay(100);
-   
-   digitalWrite(SPKR, HIGH);
-   delay(1000);                     
-   digitalWrite(SPKR, LOW);
-   delay(100);
-   
-   digitalWrite(SPKR, HIGH);
-   delay(1000);                     
-   digitalWrite(SPKR, LOW);
-   delay(100);
-
-   digitalWrite(SPKR, HIGH);
-   delay(100);                     
-   digitalWrite(SPKR, LOW);
-   delay(100);
-
-   digitalWrite(SPKR, HIGH);
-   delay(100);                     
-   digitalWrite(SPKR, LOW);
-   delay(100);
-
-   digitalWrite(SPKR, HIGH);
-   delay(100);                     
-   digitalWrite(SPKR, LOW);
-   delay(100);
-   */
 
   // Check for user input and echo it back if anything was found
   //char command[BUFSIZE+1];
