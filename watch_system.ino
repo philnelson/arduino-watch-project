@@ -78,6 +78,50 @@ int value = 100;
 
 #define SPKR 0
 
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// If using software SPI (the default case):
+#define OLED_MOSI   9
+#define OLED_CLK   10
+#define OLED_DC    3
+#define OLED_CS    0
+#define OLED_RESET 1
+Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
+
+#define NUMFLAKES 10
+#define XPOS 0
+#define YPOS 1
+#define DELTAY 2
+
+
+#define LOGO16_GLCD_HEIGHT 16 
+#define LOGO16_GLCD_WIDTH  16 
+static const unsigned char PROGMEM logo16_glcd_bmp[] =
+{ B00000000, B11000000,
+  B00000001, B11000000,
+  B00000001, B11000000,
+  B00000011, B11100000,
+  B11110011, B11100000,
+  B11111110, B11111000,
+  B01111110, B11111111,
+  B00110011, B10011111,
+  B00011111, B11111100,
+  B00001101, B01110000,
+  B00011011, B10100000,
+  B00111111, B11100000,
+  B00111111, B11110000,
+  B01111100, B11110000,
+  B01110000, B01110000,
+  B00000000, B00110000 };
+
+#if (SSD1306_LCDHEIGHT != 64)
+#error("Height incorrect, please fix Adafruit_SSD1306.h!");
+#endif
+
+
 // the setup function runs once when you press reset or power the board
 void setup() {
   while (!Serial);  // required for Flora & Micro
@@ -118,23 +162,57 @@ void setup() {
   Serial.println("Requesting Bluefruit info:");
   /* Print Bluefruit information */
   ble.info();
+
+  // SCREEN INIT
+  // by default, we'll generate the high voltage from the 3.3v line internally! (neat!)
+  display.begin(SSD1306_SWITCHCAPVCC);
+  // init done
+  
+  // Show image buffer on the display hardware.
+  // Since the buffer is intialized with an Adafruit splashscreen
+  // internally, this will display the splashscreen.
+  display.display();
+  delay(100);
+
+  display.clearDisplay();
 }
 
 // the loop function runs over and over again forever
 void loop() {
+  display.clearDisplay();
   
   digitalClockDisplay();
+
+//  Serial.println("Printing to display");
+  display.setTextSize(3);
+  display.setTextColor(WHITE);
+  display.setCursor(0,0);
+
+  display.print(hour());
+  display.print(":");
+  display.print(minute());
+  display.print(":");
+  display.setTextSize(1);
+  display.println(second());
+
+  display.setCursor(30,0);
+  display.setTextSize(1);
+  display.println(monthStr(month()));
+  display.println(day());
+  display.println(year());
+
+  display.display();
 
   if (Serial.available()) {
     processSyncMessage();
   }
 
   // Display command prompt
-  Serial.print(F("AT > "));
+  //Serial.print(F("AT > "));
 
   if (timeStatus() == timeSet) {
     digitalWrite(13, LOW);  // LED off if needs refresh
-    delay(1000);
+    delay(400);
   } else {
     digitalWrite(13, HIGH);  // LED off if needs refresh
     delay(100);
@@ -265,3 +343,4 @@ void getUserInput(char buffer[], uint8_t maxSize)
     delay(2);
   } while( (count < maxSize) && !(Serial.available() == 0) );
 }
+
