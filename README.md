@@ -1,0 +1,1 @@
+This is the software repository for the Arduino Watch Project. For more details see [the project page on extrafuture.com](https://extrafuture.com/projects/arduino-watch-project/).
