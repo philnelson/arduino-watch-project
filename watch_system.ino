@@ -1,13 +1,15 @@
 /*
- * This is all HEAVILY based on the TimeSerial.pde file from the excellent Time project
- * available here: https://github.com/PaulStoffregen/Time none of this would've been
- * possible without their work.
- */
+   This is all HEAVILY based on the TimeSerial.pde file from the excellent Time project
+   available here: https://github.com/PaulStoffregen/Time none of this would've been
+   possible without their work.
+*/
 
 #include <TimeLib.h>
 #define TIME_HEADER  "T"   // Header tag for serial time sync message
 #define TIME_REQUEST 7 // ASCII bell character requests a time sync message
 #define VBATPIN A9
+#define BUZZERPIN A5
+#define TIME_MSG_LEN 10
 
 #include <Arduino.h>
 #include <SPI.h>
@@ -21,46 +23,46 @@
 /*=========================================================================
     APPLICATION SETTINGS
 
-    FACTORYRESET_ENABLE     Perform a factory reset when running this sketch
-   
-                            Enabling this will put your Bluefruit LE module
+      FACTORYRESET_ENABLE     Perform a factory reset when running this sketch
+     
+                              Enabling this will put your Bluefruit LE module
                             in a 'known good' state and clear any config
                             data set in previous sketches or projects, so
-                            running this at least once is a good idea.
-   
-                            When deploying your project, however, you will
+                              running this at least once is a good idea.
+     
+                              When deploying your project, however, you will
                             want to disable factory reset by setting this
                             value to 0.  If you are making changes to your
-                            Bluefruit LE device via AT commands, and those
+                              Bluefruit LE device via AT commands, and those
                             changes aren't persisting across resets, this
                             is the reason why.  Factory reset will erase
                             the non-volatile memory where config data is
                             stored, setting it back to factory default
                             values.
-       
-                            Some sketches that require you to bond to a
+         
+                              Some sketches that require you to bond to a
                             central device (HID mouse, keyboard, etc.)
                             won't work at all with this feature enabled
                             since the factory reset will clear all of the
                             bonding data stored on the chip, meaning the
                             central device won't be able to reconnect.
-  
+
   MINIMUM_FIRMWARE_VERSION  Minimum firmware version to have some new features
   MODE_LED_BEHAVIOUR        LED activity, valid options are
                             "DISABLE" or "MODE" or "BLEUART" or
                             "HWUART"  or "SPI"  or "MANUAL"
     -----------------------------------------------------------------------*/
-    #define FACTORYRESET_ENABLE      1
-    #define MINIMUM_FIRMWARE_VERSION    "0.8.0"
-    #define MODE_LED_BEHAVIOUR          "MODE"
+#define FACTORYRESET_ENABLE      1
+#define MINIMUM_FIRMWARE_VERSION    "0.8.0"
+#define MODE_LED_BEHAVIOUR          "SPI"
 /*=========================================================================*/
 
 
 // Create the bluefruit object, either software serial...uncomment these lines
 /*
-SoftwareSerial bluefruitSS = SoftwareSerial(BLUEFRUIT_SWUART_TXD_PIN, BLUEFRUIT_SWUART_RXD_PIN);
+  SoftwareSerial bluefruitSS = SoftwareSerial(BLUEFRUIT_SWUART_TXD_PIN, BLUEFRUIT_SWUART_RXD_PIN);
 
-Adafruit_BluefruitLE_UART ble(bluefruitSS, BLUEFRUIT_UART_MODE_PIN,
+  Adafruit_BluefruitLE_UART ble(bluefruitSS, BLUEFRUIT_UART_MODE_PIN,
                       BLUEFRUIT_UART_CTS_PIN, BLUEFRUIT_UART_RTS_PIN);
 */
 
@@ -99,35 +101,11 @@ int value = 100;
 #define OLED_RESET 5
 Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 
-#define NUMFLAKES 10
-#define XPOS 0
-#define YPOS 1
-#define DELTAY 2
-
-
-#define LOGO16_GLCD_HEIGHT 16 
-#define LOGO16_GLCD_WIDTH  16 
-static const unsigned char PROGMEM logo16_glcd_bmp[] =
-{ B00000000, B11000000,
-  B00000001, B11000000,
-  B00000001, B11000000,
-  B00000011, B11100000,
-  B11110011, B11100000,
-  B11111110, B11111000,
-  B01111110, B11111111,
-  B00110011, B10011111,
-  B00011111, B11111100,
-  B00001101, B01110000,
-  B00011011, B10100000,
-  B00111111, B11100000,
-  B00111111, B11110000,
-  B01111100, B11110000,
-  B01110000, B01110000,
-  B00000000, B00110000 };
-
 #if (SSD1306_LCDHEIGHT != 64)
 #error("Height incorrect, please fix Adafruit_SSD1306.h!");
 #endif
+
+char* APP_MODE = "boot";
 
 Adafruit_BLEBattery battery(ble);
 
@@ -136,13 +114,14 @@ unsigned long TIME_SINCE_START;
 // the setup function runs once when you press reset or power the board
 void setup() {
   while (!Serial);  // required for Flora & Micro
-  
+
   delay(500);
 
-  Serial.begin(115200);
+  Serial.begin(9600);
 
   pinMode(13, OUTPUT);
-  
+  pinMode(BUZZERPIN, OUTPUT);
+
   setSyncProvider( requestSync);  //set function to call when sync required
   setSyncInterval(1000);
   Serial.println("Waiting for time sync message");
@@ -154,13 +133,14 @@ void setup() {
   {
     error(F("Couldn't find Bluefruit, make sure it's in CoMmanD mode & check wiring?"));
   }
+
   Serial.println( F("OK!") );
 
   if ( FACTORYRESET_ENABLE )
   {
     /* Perform a factory reset to make sure everything is in a known state */
     Serial.println(F("Performing a factory reset: "));
-    if ( ! ble.factoryReset() ){
+    if ( ! ble.factoryReset() ) {
       error(F("Couldn't factory reset"));
     }
   }
@@ -180,8 +160,11 @@ void setup() {
 
   /* Wait for connection */
   while (! ble.isConnected()) {
-      delay(500);
+    APP_MODE = "unsynced";
+    delay(100);
   }
+
+  APP_MODE = "face1";
 
   // LED Activity command is only supported from 0.6.6
   if ( ble.isVersionAtLeast(MINIMUM_FIRMWARE_VERSION) )
@@ -197,12 +180,11 @@ void setup() {
   // by default, we'll generate the high voltage from the 3.3v line internally! (neat!)
   display.begin(SSD1306_SWITCHCAPVCC);
   // init done
-  
+
   // Show image buffer on the display hardware.
   // Since the buffer is intialized with an Adafruit splashscreen
   // internally, this will display the splashscreen.
-  display.display();
-  delay(100);
+  //display.display();
 
   //display.clearDisplay();
 
@@ -213,13 +195,13 @@ void setup() {
 // the loop function runs over and over again forever
 void loop() {
   display.clearDisplay();
-  
+
   digitalClockDisplay();
 
-//  Serial.println("Printing to display");
+  //  Serial.println("Printing to display");
   display.setTextSize(2);
   display.setTextColor(WHITE);
-  display.setCursor(0,0);
+  display.setCursor(0, 0);
 
   int hourDigit = hour();
 
@@ -231,18 +213,18 @@ void loop() {
   }
 
   if (minute() > 15) {
-    minuteDisplay = "quarter past";
+    minuteDisplay = "1/4 past";
   }
 
   if (minute() > 30) {
-    minuteDisplay = "half past";
+    minuteDisplay = "1/2 past";
   }
 
   if (minute() > 45) {
-    minuteDisplay = "quarter to";
+    minuteDisplay = "1/4 to";
     hourDigit = hour() + 1;
 
-    if(hourDigit == 13) {
+    if (hourDigit == 13) {
       hourDigit = 12;
     }
   }
@@ -254,7 +236,7 @@ void loop() {
     hourDisplay = "twelve";
     //Serial.print("twelve");
   }
-  
+
   if (hourDigit == 1) {
     hourDisplay = "one";
     //Serial.print("one");
@@ -325,29 +307,27 @@ void loop() {
     display.println(" pm");
     //Serial.println(" at night");
   }
-  
+
   //display.setTextSize(2);
   //display.println(second());
 
-  display.setCursor(20,54);
   display.setTextSize(1);
+  display.setCursor(0, 54);
   display.print(monthStr(month()));
   display.print(" ");
   display.print(day());
 
-  display.display();
-
-  processSyncMessage();
+  display.setCursor(60, 54);
 
   if (timeStatus() == timeSet) {
-    digitalWrite(13, LOW);  // LED off if needs refresh
-    delay(400);
+    //display.print("set");
   } else {
-    digitalWrite(13, HIGH);  // LED off if needs refresh
-    delay(100);
-    digitalWrite(13, LOW);  // LED off if needs refresh
-    delay(100);
+    //display.print("unset");
   }
+
+  display.print(APP_MODE);
+
+  display.display();
 
   TIME_SINCE_START = millis();
 
@@ -356,26 +336,15 @@ void loop() {
   measuredvbat *= 3.3;  // Multiply by 3.3V, our reference voltage
   measuredvbat /= 1024; // convert to voltage
 
-  ble.print("AT+BLEUARTTX=");
-  ble.print(measuredvbat);
-  ble.print(",");
-  ble.println(TIME_SINCE_START);
-
-  if (! ble.waitForOK() ) {
-    Serial.println(F("Failed to send BLE battery data"));
-  }
-  
   battery.update(measuredvbat);
 
-  Serial.print(measuredvbat);
-  Serial.print(",");
-  Serial.println(TIME_SINCE_START);
+  processSyncMessage();
 
-  delay(5000);
-  
+  delay(100);
+
 }
 
-void digitalClockDisplay(){
+void digitalClockDisplay() {
   // digital clock display of the time
   Serial.print(hour());
   printDigits(minute());
@@ -387,14 +356,14 @@ void digitalClockDisplay(){
   Serial.print(" ");
   Serial.print(day());
   //Serial.print(" ");
-  //Serial.print(year()); 
-  Serial.println(); 
+  //Serial.print(year());
+  Serial.println();
 }
 
-void printDigits(int digits){
+void printDigits(int digits) {
   // utility function for digital clock display: prints preceding colon and leading 0
   Serial.print(":");
-  if(digits < 10)
+  if (digits < 10)
     Serial.print('0');
   Serial.print(digits);
 }
@@ -405,64 +374,17 @@ void processSyncMessage() {
   const unsigned long DEFAULT_TIME = 1529743356; // Now
 
   //setTime(DEFAULT_TIME);
-
-  int TIME_MSG_LEN = 10;
-
-while (Serial.available() >= TIME_MSG_LEN ) { // time message consists of header & 10 ASCII digits
-  char c = Serial.read() ;
-  Serial.print(c);
-  if ( c == TIME_HEADER ) {
-    time_t pctime = 0;
-    for (int i = 0; i < TIME_MSG_LEN - 1; i++) {
-      c = Serial.read();
-      if ( c >= '0' && c <= '9') {
-        pctime = (10 * pctime) + (c - '0') ; // convert digits to a number
-      }
+  if (Serial.find(TIME_HEADER)) {
+    pctime = Serial.parseInt();
+    if ( pctime >= DEFAULT_TIME) { // check the integer is a valid time (greater than Jan 1 2013)
+      setTime(pctime); // Sync Arduino clock to the time received on the serial port
     }
-    Serial.println(pctime);
-    setTime(pctime); // Sync Arduino clock to the time received on the serial port
   }
- }
-  
-  // Check for user input
-  char inputs[BUFSIZE+1];
-
-  //if ( getUserInput(inputs, BUFSIZE) )
-  //{
-    // Send characters to Bluefruit
-  //  Serial.print("[Send] ");
-  //  Serial.println(inputs);
-
-   // ble.print("AT+BLEUARTTX=");
-   // ble.println(inputs);
-
-    // check response stastus
-   // if (! ble.waitForOK() ) {
-   //   Serial.println(F("Failed to send?"));
-   // }
-  //}
-
-  // Check for incoming characters from Bluefruit
-  ble.println("AT+BLEUARTRX");
-  ble.readline();
-  if (strcmp(ble.buffer, "OK") == 0) {
-    return;
-  }
-  else {
-    // Some data was found, its in the buffer
-    Serial.print(F("[Recv] ")); Serial.println(ble.buffer);
-
-    setTime(ble.buffer);
-
-    TEXT_STRING = ble.buffer;
-  }
-
-  ble.waitForOK();
 }
 
 time_t requestSync()
 {
-  Serial.write(TIME_REQUEST);  
+  Serial.write(TIME_REQUEST);
   return 0; // the time will be sent later in response to serial mesg
 }
 
@@ -477,17 +399,19 @@ bool getUserInput(char buffer[], uint8_t maxSize)
   TimeoutTimer timeout(100);
 
   memset(buffer, 0, maxSize);
-  while( (!Serial.available()) && !timeout.expired() ) { delay(1); }
+  while ( (!Serial.available()) && !timeout.expired() ) {
+    delay(1);
+  }
 
   if ( timeout.expired() ) return false;
 
   delay(2);
-  uint8_t count=0;
+  uint8_t count = 0;
   do
   {
-    count += Serial.readBytes(buffer+count, maxSize);
+    count += Serial.readBytes(buffer + count, maxSize);
     delay(2);
-  } while( (count < maxSize) && (Serial.available()) );
+  } while ( (count < maxSize) && (Serial.available()) );
 
   return true;
 }
