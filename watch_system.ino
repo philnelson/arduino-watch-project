@@ -7,6 +7,7 @@
 #include <TimeLib.h>
 #define TIME_HEADER  "T"   // Header tag for serial time sync message
 #define TIME_REQUEST 7 // ASCII bell character requests a time sync message
+#define VBATPIN A9
 
 #include <Arduino.h>
 #include <SPI.h>
@@ -43,8 +44,15 @@
                             since the factory reset will clear all of the
                             bonding data stored on the chip, meaning the
                             central device won't be able to reconnect.
+  
+  MINIMUM_FIRMWARE_VERSION  Minimum firmware version to have some new features
+  MODE_LED_BEHAVIOUR        LED activity, valid options are
+                            "DISABLE" or "MODE" or "BLEUART" or
+                            "HWUART"  or "SPI"  or "MANUAL"
     -----------------------------------------------------------------------*/
     #define FACTORYRESET_ENABLE      1
+    #define MINIMUM_FIRMWARE_VERSION    "0.8.0"
+    #define MODE_LED_BEHAVIOUR          "MODE"
 /*=========================================================================*/
 
 
@@ -57,7 +65,7 @@ Adafruit_BluefruitLE_UART ble(bluefruitSS, BLUEFRUIT_UART_MODE_PIN,
 */
 
 /* ...or hardware serial, which does not need the RTS/CTS pins. Uncomment this line */
-// Adafruit_BluefruitLE_UART ble(BLUEFRUIT_HWSERIAL_NAME, BLUEFRUIT_UART_MODE_PIN);
+//Adafruit_BluefruitLE_UART ble(BLUEFRUIT_HWSERIAL_NAME, BLUEFRUIT_UART_MODE_PIN);
 
 /* ...hardware SPI, using SCK/MOSI/MISO hardware SPI pins and then user selected CS/IRQ/RST */
 Adafruit_BluefruitLE_SPI ble(BLUEFRUIT_SPI_CS, BLUEFRUIT_SPI_IRQ, BLUEFRUIT_SPI_RST);
@@ -74,6 +82,8 @@ void error(const __FlashStringHelper*err) {
   while (1);
 }
 
+char* TEXT_STRING = "Hi.";
+
 int value = 100;
 
 #include <SPI.h>
@@ -84,9 +94,9 @@ int value = 100;
 // If using software SPI (the default case):
 #define OLED_MOSI   9
 #define OLED_CLK   10
-#define OLED_DC    3
+#define OLED_DC    11
 #define OLED_CS    12
-#define OLED_RESET 13
+#define OLED_RESET 5
 Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 
 #define NUMFLAKES 10
@@ -119,20 +129,23 @@ static const unsigned char PROGMEM logo16_glcd_bmp[] =
 #error("Height incorrect, please fix Adafruit_SSD1306.h!");
 #endif
 
+Adafruit_BLEBattery battery(ble);
+
+unsigned long TIME_SINCE_START;
 
 // the setup function runs once when you press reset or power the board
 void setup() {
   while (!Serial);  // required for Flora & Micro
+  
   delay(500);
 
   Serial.begin(115200);
 
   pinMode(13, OUTPUT);
+  
   setSyncProvider( requestSync);  //set function to call when sync required
+  setSyncInterval(1000);
   Serial.println("Waiting for time sync message");
-
-  Serial.println(F("Adafruit Bluefruit AT Command Example"));
-  Serial.println(F("-------------------------------------"));
 
   /* Initialise the module */
   Serial.print(F("Initialising the Bluefruit LE module: "));
@@ -159,6 +172,27 @@ void setup() {
   /* Print Bluefruit information */
   ble.info();
 
+  Serial.println(F("Please use Adafruit Bluefruit LE app to connect in UART mode"));
+  Serial.println(F("Then Enter characters to send to Bluefruit"));
+  Serial.println();
+
+  ble.verbose(false);  // debug info is a little annoying after this point!
+
+  /* Wait for connection */
+  while (! ble.isConnected()) {
+      delay(500);
+  }
+
+  // LED Activity command is only supported from 0.6.6
+  if ( ble.isVersionAtLeast(MINIMUM_FIRMWARE_VERSION) )
+  {
+    // Change Mode LED Activity
+    Serial.println(F("******************************"));
+    Serial.println(F("Change LED activity to " MODE_LED_BEHAVIOUR));
+    ble.sendCommandCheckOK("AT+HWModeLED=" MODE_LED_BEHAVIOUR);
+    Serial.println(F("******************************"));
+  }
+
   // SCREEN INIT
   // by default, we'll generate the high voltage from the 3.3v line internally! (neat!)
   display.begin(SSD1306_SWITCHCAPVCC);
@@ -170,7 +204,10 @@ void setup() {
   display.display();
   delay(100);
 
-  display.clearDisplay();
+  //display.clearDisplay();
+
+  // Enable Battery service and reset Bluefruit
+  battery.begin(true);
 }
 
 // the loop function runs over and over again forever
@@ -180,31 +217,127 @@ void loop() {
   digitalClockDisplay();
 
 //  Serial.println("Printing to display");
-  display.setTextSize(3);
+  display.setTextSize(2);
   display.setTextColor(WHITE);
   display.setCursor(0,0);
 
-  display.print(hour());
-  display.print(":");
-  display.print(minute());
-  display.print(":");
-  display.setTextSize(1);
-  display.println(second());
+  int hourDigit = hour();
 
-  display.setCursor(30,0);
+  char* minuteDisplay;
+  char* hourDisplay;
+
+  if (minute() < 15) {
+    minuteDisplay = "just";
+  }
+
+  if (minute() > 15) {
+    minuteDisplay = "quarter past";
+  }
+
+  if (minute() > 30) {
+    minuteDisplay = "half past";
+  }
+
+  if (minute() > 45) {
+    minuteDisplay = "quarter to";
+    hourDigit = hour() + 1;
+
+    if(hourDigit == 13) {
+      hourDigit = 12;
+    }
+  }
+
+  display.println(minuteDisplay);
+  //Serial.println(minuteDisplay);
+
+  if (hourDigit == 0) {
+    hourDisplay = "twelve";
+    //Serial.print("twelve");
+  }
+  
+  if (hourDigit == 1) {
+    hourDisplay = "one";
+    //Serial.print("one");
+  }
+
+  if (hourDigit == 2) {
+    hourDisplay = "two";
+    //Serial.print("two");
+  }
+
+  if (hourDigit == 3) {
+    hourDisplay = "three";
+    //Serial.print("three");
+  }
+
+  if (hourDigit == 4) {
+    hourDisplay = "four";
+    //Serial.print("four");
+  }
+
+  if (hourDigit == 5) {
+    hourDisplay = "five";
+    //Serial.print("five");
+  }
+
+  if (hourDigit == 6) {
+    hourDisplay = "six";
+    //Serial.print("six");
+  }
+
+  if (hourDigit == 7) {
+    hourDisplay = "seven";
+    //Serial.print("seven");
+  }
+
+  if (hourDigit == 8) {
+    hourDisplay = "eight";
+    //Serial.print("eight");
+  }
+
+  if (hourDigit == 9) {
+    hourDisplay = "nine";
+    //Serial.print("nine");
+  }
+
+  if (hourDigit == 10) {
+    hourDisplay = "ten";
+    //Serial.print("ten");
+  }
+
+  if (hourDigit == 11) {
+    hourDisplay = "eleven";
+    //Serial.print("eleven");
+  }
+
+  if (hourDigit == 12) {
+    hourDisplay = "twelve";
+    //Serial.print("twelve");
+  }
+
+  display.print(hourDisplay);
+  //display.println(TEXT_STRING);
+
+  if (isAM()) {
+    display.println(" am");
+    //Serial.println(" in the morning");
+  } else {
+    display.println(" pm");
+    //Serial.println(" at night");
+  }
+  
+  //display.setTextSize(2);
+  //display.println(second());
+
+  display.setCursor(20,54);
   display.setTextSize(1);
-  display.println(monthStr(month()));
-  display.println(day());
-  display.println(year());
+  display.print(monthStr(month()));
+  display.print(" ");
+  display.print(day());
 
   display.display();
 
-  if (Serial.available()) {
-    processSyncMessage();
-  }
-
-  // Display command prompt
-  //Serial.print(F("AT > "));
+  processSyncMessage();
 
   if (timeStatus() == timeSet) {
     digitalWrite(13, LOW);  // LED off if needs refresh
@@ -216,16 +349,29 @@ void loop() {
     delay(100);
   }
 
-  // Check for user input and echo it back if anything was found
-  //char command[BUFSIZE+1];
-  //getUserInput(command, BUFSIZE);
+  TIME_SINCE_START = millis();
 
-  // Send command
-  //ble.println(command);
-  //ble.println("testing");
+  float measuredvbat = analogRead(VBATPIN);
+  measuredvbat *= 2;    // we divided by 2, so multiply back
+  measuredvbat *= 3.3;  // Multiply by 3.3V, our reference voltage
+  measuredvbat /= 1024; // convert to voltage
 
-  // Check response status
-  //ble.waitForOK();
+  ble.print("AT+BLEUARTTX=");
+  ble.print(measuredvbat);
+  ble.print(",");
+  ble.println(TIME_SINCE_START);
+
+  if (! ble.waitForOK() ) {
+    Serial.println(F("Failed to send BLE battery data"));
+  }
+  
+  battery.update(measuredvbat);
+
+  Serial.print(measuredvbat);
+  Serial.print(",");
+  Serial.println(TIME_SINCE_START);
+
+  delay(5000);
   
 }
 
@@ -256,14 +402,62 @@ void printDigits(int digits){
 
 void processSyncMessage() {
   unsigned long pctime;
-  const unsigned long DEFAULT_TIME = 1529177175; // Now
+  const unsigned long DEFAULT_TIME = 1529743356; // Now
 
-  if(Serial.find(TIME_HEADER)) {
-     pctime = Serial.parseInt();
-     if( pctime >= DEFAULT_TIME) { // check the integer is a valid time (greater than Jan 1 2013)
-       setTime(pctime); // Sync Arduino clock to the time received on the serial port
-     }
+  //setTime(DEFAULT_TIME);
+
+  int TIME_MSG_LEN = 10;
+
+while (Serial.available() >= TIME_MSG_LEN ) { // time message consists of header & 10 ASCII digits
+  char c = Serial.read() ;
+  Serial.print(c);
+  if ( c == TIME_HEADER ) {
+    time_t pctime = 0;
+    for (int i = 0; i < TIME_MSG_LEN - 1; i++) {
+      c = Serial.read();
+      if ( c >= '0' && c <= '9') {
+        pctime = (10 * pctime) + (c - '0') ; // convert digits to a number
+      }
+    }
+    Serial.println(pctime);
+    setTime(pctime); // Sync Arduino clock to the time received on the serial port
   }
+ }
+  
+  // Check for user input
+  char inputs[BUFSIZE+1];
+
+  //if ( getUserInput(inputs, BUFSIZE) )
+  //{
+    // Send characters to Bluefruit
+  //  Serial.print("[Send] ");
+  //  Serial.println(inputs);
+
+   // ble.print("AT+BLEUARTTX=");
+   // ble.println(inputs);
+
+    // check response stastus
+   // if (! ble.waitForOK() ) {
+   //   Serial.println(F("Failed to send?"));
+   // }
+  //}
+
+  // Check for incoming characters from Bluefruit
+  ble.println("AT+BLEUARTRX");
+  ble.readline();
+  if (strcmp(ble.buffer, "OK") == 0) {
+    return;
+  }
+  else {
+    // Some data was found, its in the buffer
+    Serial.print(F("[Recv] ")); Serial.println(ble.buffer);
+
+    setTime(ble.buffer);
+
+    TEXT_STRING = ble.buffer;
+  }
+
+  ble.waitForOK();
 }
 
 time_t requestSync()
@@ -277,19 +471,23 @@ time_t requestSync()
     @brief  Checks for user input (via the Serial Monitor)
 */
 /**************************************************************************/
-void getUserInput(char buffer[], uint8_t maxSize)
+bool getUserInput(char buffer[], uint8_t maxSize)
 {
+  // timeout in 100 milliseconds
+  TimeoutTimer timeout(100);
+
   memset(buffer, 0, maxSize);
-  while( Serial.available() == 0 ) {
-    delay(1);
-  }
+  while( (!Serial.available()) && !timeout.expired() ) { delay(1); }
 
+  if ( timeout.expired() ) return false;
+
+  delay(2);
   uint8_t count=0;
-
   do
   {
     count += Serial.readBytes(buffer+count, maxSize);
     delay(2);
-  } while( (count < maxSize) && !(Serial.available() == 0) );
-}
+  } while( (count < maxSize) && (Serial.available()) );
 
+  return true;
+}
