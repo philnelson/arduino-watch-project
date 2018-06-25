@@ -6,10 +6,10 @@
 
 #include <TimeLib.h>
 #define TIME_HEADER  "T"   // Header tag for serial time sync message
+#define FACE_HEADER  "F"   // Header tag for serial command message
 #define TIME_REQUEST 7 // ASCII bell character requests a time sync message
 #define VBATPIN A9
-#define BUZZERPIN A5
-#define TIME_MSG_LEN 10
+#define TIME_MSG_LEN 11
 
 #include <Arduino.h>
 #include <SPI.h>
@@ -17,7 +17,6 @@
 #include "Adafruit_BLE.h"
 #include "Adafruit_BluefruitLE_SPI.h"
 #include "Adafruit_BluefruitLE_UART.h"
-#include "Adafruit_BLEBattery.h"
 #include "BluefruitConfig.h"
 
 /*=========================================================================
@@ -54,7 +53,8 @@
     -----------------------------------------------------------------------*/
 #define FACTORYRESET_ENABLE      1
 #define MINIMUM_FIRMWARE_VERSION    "0.8.0"
-#define MODE_LED_BEHAVIOUR          "SPI"
+#define MODE_LED_BEHAVIOUR          "MODE"
+#define BLE_READPACKET_TIMEOUT 250
 /*=========================================================================*/
 
 
@@ -77,7 +77,6 @@ Adafruit_BluefruitLE_SPI ble(BLUEFRUIT_SPI_CS, BLUEFRUIT_SPI_IRQ, BLUEFRUIT_SPI_
 //                             BLUEFRUIT_SPI_MOSI, BLUEFRUIT_SPI_CS,
 //                             BLUEFRUIT_SPI_IRQ, BLUEFRUIT_SPI_RST);
 
-
 // A small helper
 void error(const __FlashStringHelper*err) {
   Serial.println(err);
@@ -94,7 +93,7 @@ int value = 100;
 #include <Adafruit_SSD1306.h>
 
 // If using software SPI (the default case):
-#define OLED_MOSI   9
+#define OLED_MOSI   6
 #define OLED_CLK   10
 #define OLED_DC    11
 #define OLED_CS    12
@@ -107,23 +106,24 @@ Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 
 char* APP_MODE = "boot";
 
-Adafruit_BLEBattery battery(ble);
-
 unsigned long TIME_SINCE_START;
+
+int incomingByte = 0;
 
 // the setup function runs once when you press reset or power the board
 void setup() {
-  while (!Serial);  // required for Flora & Micro
+
+  //while (!Serial);  // required for Flora & Micro
 
   delay(500);
 
   Serial.begin(9600);
 
   pinMode(13, OUTPUT);
-  pinMode(BUZZERPIN, OUTPUT);
+  pinMode(VBATPIN, OUTPUT);
 
   setSyncProvider( requestSync);  //set function to call when sync required
-  setSyncInterval(1000);
+  setSyncInterval(10000);
   Serial.println("Waiting for time sync message");
 
   /* Initialise the module */
@@ -158,13 +158,7 @@ void setup() {
 
   ble.verbose(false);  // debug info is a little annoying after this point!
 
-  /* Wait for connection */
-  while (! ble.isConnected()) {
-    APP_MODE = "unsynced";
-    delay(100);
-  }
-
-  APP_MODE = "face1";
+  ble.setMode(BLUEFRUIT_MODE_DATA);
 
   // LED Activity command is only supported from 0.6.6
   if ( ble.isVersionAtLeast(MINIMUM_FIRMWARE_VERSION) )
@@ -184,53 +178,232 @@ void setup() {
   // Show image buffer on the display hardware.
   // Since the buffer is intialized with an Adafruit splashscreen
   // internally, this will display the splashscreen.
-  //display.display();
+  display.display();
 
   //display.clearDisplay();
 
-  // Enable Battery service and reset Bluefruit
-  battery.begin(true);
+  APP_MODE = "unsynced";
+
+  delay(5000);
 }
 
 // the loop function runs over and over again forever
 void loop() {
+
   display.clearDisplay();
 
   digitalClockDisplay();
 
+  if (APP_MODE == "unsynced") {
+    display.setTextSize(2);
+    display.setTextColor(WHITE);
+    display.setCursor(0, 0);
+
+    if (! ble.isConnected()) {
+      display.println("Hi!");
+    }
+    else {
+      display.println("Connected.");
+    }
+
+    display.setCursor(0, 20);
+    display.setTextSize(1);
+    if (! ble.isConnected()) {
+      display.println("Connect via Bluetooth to set the time.");
+    }
+    else {
+      display.println("Connected via Bluetooth... hang tight.");
+    }
+
+  }
+
+  if (APP_MODE == "face1") {
+    displayFaceOne();
+  }
+
+  if (APP_MODE == "face2") {
+    displayFaceTwo();
+  }
+
+  display.display();
+
+  TIME_SINCE_START = millis() / 1000;
+
+  //ble.print(TIME_SINCE_START);
+
+  if (APP_MODE == "unsynced") {
+    processSyncMessage();
+  }
+  else
+  {
+    // Go into low-power mode
+    processFaceMessage();
+    delay(400);
+  }
+
+}
+
+void digitalClockDisplay() {
+  // digital clock display of the time
+  Serial.print(hour());
+  printDigits(minute());
+  printDigits(second());
+  Serial.print(" ");
+  Serial.print(dayStr(weekday()));
+  Serial.print(" ");
+  Serial.print(monthStr(month()));
+  Serial.print(" ");
+  Serial.print(day());
+  //Serial.print(" ");
+  //Serial.print(year());
+  Serial.println();
+}
+
+void printDigits(int digits) {
+  // utility function for digital clock display: prints preceding colon and leading 0
+  Serial.print(":");
+  if (digits < 10)
+    Serial.print('0');
+  Serial.print(digits);
+}
+
+void processSyncMessage() {
+  unsigned long pctime;
+  const unsigned long DEFAULT_TIME = 1529743356; // Now
+
+  //setTime(DEFAULT_TIME);
+  if (Serial.available() > 0) {
+    if (Serial.find(TIME_HEADER)) {
+      Serial.println("Setting time via Serial");
+      pctime = Serial.parseInt();
+      if ( pctime >= DEFAULT_TIME) { // check the integer is a valid time (greater than Jan 1 2013)
+        setTime(pctime); // Sync Arduino clock to the time received on the serial port
+        adjustTime(-25200);
+        // Turn off BLE light
+        ble.sendCommandCheckOK("AT+HWModeLED=DISABLE");
+        APP_MODE = "face1";
+      }
+    }
+  }
+
+  if (ble.available() > 0) {
+    if (ble.find(TIME_HEADER)) {
+      Serial.println("Setting time via BLE");
+      pctime = ble.parseInt();
+      if ( pctime >= DEFAULT_TIME) { // check the integer is a valid time (greater than Jan 1 2013)
+        setTime(pctime); // Sync Arduino clock to the time received on the serial port
+        adjustTime(-25200);
+        // Turn off BLE light
+        ble.sendCommandCheckOK("AT+HWModeLED=DISABLE");
+        APP_MODE = "face1";
+      }
+    }
+
+    //String ble_str = (char*)ble.buffer;
+
+    ble.waitForOK();
+
+  }
+
+}
+
+void processFaceMessage() {
+
+  if (ble.available() > 0) {
+    String ble_input = ble.readString();
+
+    Serial.println(ble_input);
+
+    ble_input.trim();
+
+    if (ble_input == "Fface1") {
+      Serial.println("face1");
+      APP_MODE = "face1";
+    }
+
+    if (ble_input == "Fface2") {
+      Serial.println("face2");
+      APP_MODE = "face2";
+    }
+    
+    ble.waitForOK();
+  }
+}
+
+time_t requestSync()
+{
+  Serial.write(TIME_REQUEST);
+  return 0; // the time will be sent later in response to serial mesg
+}
+
+void displayFaceOne()
+{
   //  Serial.println("Printing to display");
   display.setTextSize(2);
   display.setTextColor(WHITE);
   display.setCursor(0, 0);
 
-  int hourDigit = hour();
+  int hourDigit = hourFormat12();
 
   char* minuteDisplay;
   char* hourDisplay;
 
-  if (minute() < 15) {
-    minuteDisplay = "just";
+  if (minute() == 0) {
+    minuteDisplay = "precisely";
   }
 
-  if (minute() > 15) {
+  if (minute() < 3) {
+    minuteDisplay = "just after";
+  }
+
+  if (minute() >= 3) {
+    minuteDisplay = "5 past";
+  }
+
+  if (minute() >= 8) {
+    minuteDisplay = "10 past";
+  }
+
+  if (minute() >= 13) {
     minuteDisplay = "1/4 past";
   }
 
-  if (minute() > 30) {
+  if (minute() >= 18) {
+    minuteDisplay = "20 past";
+  }
+
+  if (minute() >= 23) {
+    minuteDisplay = "25 past";
+  }
+
+  if (minute() >= 28) {
     minuteDisplay = "1/2 past";
   }
 
-  if (minute() > 45) {
-    minuteDisplay = "1/4 to";
-    hourDigit = hour() + 1;
+  if (minute() >= 33) {
+    minuteDisplay = "25 to";
+    hourDigit = hourFormat12() + 1;
 
     if (hourDigit == 13) {
       hourDigit = 12;
     }
   }
 
-  display.println(minuteDisplay);
-  //Serial.println(minuteDisplay);
+  if (minute() >= 38) {
+    minuteDisplay = "20 to";
+  }
+
+  if (minute() >= 43) {
+    minuteDisplay = "1/4 to";
+  }
+
+  if (minute() >= 48) {
+    minuteDisplay = "10 to";
+  }
+
+  if (minute() >= 53) {
+    minuteDisplay = "almost";
+  }
 
   if (hourDigit == 0) {
     hourDisplay = "twelve";
@@ -297,8 +470,13 @@ void loop() {
     //Serial.print("twelve");
   }
 
-  display.print(hourDisplay);
-  //display.println(TEXT_STRING);
+  if (hourDisplay == "four" && (minute(34) || minute(35))) {
+    display.println("twenty-five or six to four");
+  }
+  else {
+    display.println(minuteDisplay);
+    display.print(hourDisplay);
+  }
 
   if (isAM()) {
     display.println(" am");
@@ -317,101 +495,25 @@ void loop() {
   display.print(" ");
   display.print(day());
 
-  display.setCursor(60, 54);
+  display.setCursor(50, 54);
 
   if (timeStatus() == timeSet) {
-    //display.print("set");
+    //display.print("no sync");
   } else {
-    //display.print("unset");
+    //display.print("sync");
   }
+
+  display.setCursor(80, 54);
 
   display.print(APP_MODE);
-
-  display.display();
-
-  TIME_SINCE_START = millis();
-
-  float measuredvbat = analogRead(VBATPIN);
-  measuredvbat *= 2;    // we divided by 2, so multiply back
-  measuredvbat *= 3.3;  // Multiply by 3.3V, our reference voltage
-  measuredvbat /= 1024; // convert to voltage
-
-  battery.update(measuredvbat);
-
-  processSyncMessage();
-
-  delay(100);
-
 }
 
-void digitalClockDisplay() {
-  // digital clock display of the time
-  Serial.print(hour());
-  printDigits(minute());
-  printDigits(second());
-  Serial.print(" ");
-  Serial.print(dayStr(weekday()));
-  Serial.print(" ");
-  Serial.print(monthStr(month()));
-  Serial.print(" ");
-  Serial.print(day());
-  //Serial.print(" ");
-  //Serial.print(year());
-  Serial.println();
+void displayFaceTwo() {
+  display.setCursor(0, 0);
+  display.setTextSize(3);
+  display.print(hour());
+  display.print(":");
+  display.println(minute());
+  display.print(APP_MODE);
 }
 
-void printDigits(int digits) {
-  // utility function for digital clock display: prints preceding colon and leading 0
-  Serial.print(":");
-  if (digits < 10)
-    Serial.print('0');
-  Serial.print(digits);
-}
-
-
-void processSyncMessage() {
-  unsigned long pctime;
-  const unsigned long DEFAULT_TIME = 1529743356; // Now
-
-  //setTime(DEFAULT_TIME);
-  if (Serial.find(TIME_HEADER)) {
-    pctime = Serial.parseInt();
-    if ( pctime >= DEFAULT_TIME) { // check the integer is a valid time (greater than Jan 1 2013)
-      setTime(pctime); // Sync Arduino clock to the time received on the serial port
-    }
-  }
-}
-
-time_t requestSync()
-{
-  Serial.write(TIME_REQUEST);
-  return 0; // the time will be sent later in response to serial mesg
-}
-
-/**************************************************************************/
-/*!
-    @brief  Checks for user input (via the Serial Monitor)
-*/
-/**************************************************************************/
-bool getUserInput(char buffer[], uint8_t maxSize)
-{
-  // timeout in 100 milliseconds
-  TimeoutTimer timeout(100);
-
-  memset(buffer, 0, maxSize);
-  while ( (!Serial.available()) && !timeout.expired() ) {
-    delay(1);
-  }
-
-  if ( timeout.expired() ) return false;
-
-  delay(2);
-  uint8_t count = 0;
-  do
-  {
-    count += Serial.readBytes(buffer + count, maxSize);
-    delay(2);
-  } while ( (count < maxSize) && (Serial.available()) );
-
-  return true;
-}
